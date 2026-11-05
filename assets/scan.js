@@ -23,7 +23,12 @@
     return m ? {t: m[1]} : null;
   }
 
-  let lastBad = "", lastId = "", ignoreId = "", ignoreUntil = 0;
+  const GAP_MS = 1500;
+  const log = m => { if (window.Hitster && Hitster.log) Hitster.log(m); };
+  let lastBad = "", lastId = "", blocked = false, noQrSince = 0;
+
+  // Na 'Scan volgende' wordt hetzelfde kaartje pas weer geaccepteerd nadat er GAP_MS lang geen QR in beeld was.
+  // Een andere QR (ander ID) mag direct.
   function tick() {
     if (!scanning) return;
     if (video.readyState === video.HAVE_ENOUGH_DATA && video.videoWidth) {
@@ -33,11 +38,28 @@
       ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
       const img = ctx.getImageData(0, 0, canvas.width, canvas.height);
       const code = jsQR(img.data, img.width, img.height, {inversionAttempts: "attemptBoth"});
+      const now = Date.now();
       if (code && code.data) {
+        noQrSince = 0;
         const r = parse(code.data);
-        if (r && r.t === ignoreId && Date.now() < ignoreUntil) { /* zelfde kaartje nog in beeld */ }
-        else if (r) { found(r); return; }
-        if (code.data !== lastBad) { lastBad = code.data; msg("Dit is geen Hitster-kaartje. Gelezen: \u201c" + code.data.slice(0, 60) + "\u201d. Probeer een ander kaartje."); }
+        if (r && blocked && r.t === lastId) {
+          if (lastBad !== "same") { lastBad = "same"; log("genegeerd: zelfde kaartje nog in beeld " + r.t.slice(-4)); }
+          msg("Haal het vorige kaartje weg en houd een nieuw kaartje voor de camera.");
+        } else if (r) {
+          log("geaccepteerd " + r.t.slice(-4) + (blocked ? " (ander ID)" : ""));
+          found(r); return;
+        } else if (code.data !== lastBad) {
+          lastBad = code.data;
+          log("geen kaartje: " + code.data.slice(0, 40));
+          msg("Dit is geen Hitster-kaartje. Gelezen: \u201c" + code.data.slice(0, 60) + "\u201d. Probeer een ander kaartje.");
+        }
+      } else {
+        if (!noQrSince) noQrSince = now;
+        if (blocked && now - noQrSince >= GAP_MS) {
+          blocked = false; lastBad = "";
+          log("geen QR in beeld >= " + GAP_MS + " ms: scanner vrij");
+          msg("Houd een kaartje voor de camera.");
+        }
       }
     }
     setTimeout(() => requestAnimationFrame(tick), 120);
@@ -45,12 +67,10 @@
 
   function found(r) {
     scanning = false;
-    video.pause();
     $("scanner").hidden = true;
-    lastId = r.t;
+    lastId = r.t; blocked = false;
     Hitster.load(r.t, true);
   }
-
   async function start() {
     Hitster.prepare();
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
@@ -80,12 +100,11 @@
 
   $("startcam").onclick = start;
   $("next").onclick = () => {
+    log("scan volgende getikt");
     Hitster.stop();
-    // Het kaartje dat net gescand is nog even negeren, zodat het niet direct opnieuw start.
-    ignoreId = lastId; ignoreUntil = Date.now() + 2500; lastBad = "";
+    blocked = true; noQrSince = 0; lastBad = "";
     $("scanner").hidden = false;
-    msg("Houd een kaartje voor de camera.");
+    msg("Haal het vorige kaartje weg en houd een nieuw kaartje voor de camera.");
     if (stream) { video.play(); scanning = true; tick(); } else start();
   };
 })();
-

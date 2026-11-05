@@ -1,4 +1,4 @@
-/* Spoilervrije speler: Spotify-embed (iFrame API, 30 s preview zonder login), verborgen onder #cover.
+﻿/* Spoilervrije speler: Spotify-embed (iFrame API, 30 s preview zonder login), verborgen onder #cover.
    Eén controller wordt hergebruikt. Elke load krijgt een token; play() wordt pas gestuurd als de embed
    de nieuwe URI meldt (playback_update.playingURI) of na een korte time-out, en alleen voor het actuele token.
    Zo speelt een tweede scan niet het vorige nummer en start 'Scan volgende' niets. */
@@ -25,7 +25,7 @@
   function sendPlay(tok) {
     if (tok !== token || !wantUri || !ctrl) return;
     playSent = true;
-    try { ctrl.play(); } catch (e) {}
+    dbg("play " + wantUri.slice(-4)); try { ctrl.play(); } catch (e) {}
     clearTimeout(tTap);
     tTap = setTimeout(() => { if (tok === token && !playing) tapHint(); }, 3000);
   }
@@ -38,7 +38,7 @@
     $("play").disabled = false;
     if (loadedUri !== wantUri) {
       loadedUri = wantUri;
-      try { ctrl.loadUri(wantUri); } catch (e) {}
+      dbg("loadUri " + wantUri.slice(-4)); try { ctrl.loadUri(wantUri); } catch (e) {}
       playSent = false;
       clearTimeout(tPlay);
       // Time-out als de embed geen playingURI meldt.
@@ -57,21 +57,36 @@
     setPlayingUi(!d.isPaused);
   }
 
+  let api = null;
+  const dbg = (function () {
+    if (!/[?&]debug=1/.test(location.search)) return () => {};
+    const el = document.createElement("pre");
+    el.style.cssText = "position:fixed;left:0;right:0;top:0;max-height:38vh;overflow:auto;margin:0;padding:6px;z-index:99;background:rgba(30,46,30,.92);color:#E8EFE4;font:10px/1.3 monospace;text-align:left;white-space:pre-wrap";
+    document.body.appendChild(el);
+    return m => { el.textContent += ((performance.now() / 1000).toFixed(1) + " " + m + "\n"); el.scrollTop = el.scrollHeight; };
+  })();
+  H.log = dbg;
+
+  function make() {
+    if (!api || ctrl) return;
+    const uri = wantUri || WARM_URI;
+    api.createController($("sp"), {uri, width: "100%", height: 152}, c => {
+      ctrl = c; loadedUri = uri; dbg("controller gemaakt " + uri.slice(-4));
+      c.addListener("ready", () => { ready = true; dbg("ready"); if (wantUri) loadedUri = ""; apply(); });
+      c.addListener("playback_update", e => { const d = e.data || {}; dbg("update " + String(d.playingURI || "").slice(-4) + " paused=" + d.isPaused); onUpdate(e); });
+    });
+  }
+
   function ensure() {
-    if (ctrl || loading) return;
+    if (ctrl) return;
+    if (api) { make(); return; }
+    if (loading) return;
     loading = true;
-    window.onSpotifyIframeApiReady = api => {
-      api.createController($("sp"), {uri: wantUri || WARM_URI, width: "100%", height: 152}, c => {
-        ctrl = c; loadedUri = wantUri || WARM_URI;
-        c.addListener("ready", () => { ready = true; if (wantUri) { loadedUri = ""; } apply(); });
-        c.addListener("playback_update", onUpdate);
-      });
-    };
+    window.onSpotifyIframeApiReady = a => { api = a; make(); };
     const s = document.createElement("script");
     s.src = "https://open.spotify.com/embed/iframe-api/v1"; s.async = true;
     document.body.appendChild(s);
   }
-
   // Moet vanuit een tik worden aangeroepen.
   H.prepare = ensure;
   H.auto = false;
@@ -88,16 +103,22 @@
     ensure(); apply();
   };
 
-  // 'Scan volgende': alles annuleren, pauzeren en terug naar de neutrale track zodat er niets nawerkt.
+  // 'Scan volgende': alles annuleren, embed pauzeren en weggooien; direct (binnen de tik) een nieuwe, stille embed aanmaken.
   H.stop = function () {
     clearTimers();
     token++;
     wantUri = ""; playSent = false; H.auto = false;
-    try { if (ctrl) { ctrl.pause(); if (loadedUri !== WARM_URI) { ctrl.loadUri(WARM_URI); loadedUri = WARM_URI; } } } catch (e) {}
+    dbg("stop: pause + destroy embed");
+    try { if (ctrl) ctrl.pause(); } catch (e) {}
+    try { if (ctrl && ctrl.destroy) ctrl.destroy(); } catch (e) {}
+    ctrl = null; ready = false; loadedUri = "";
+    $("under").innerHTML = '<div id="sp"></div>';
     setPlayingUi(false);
     $("play").classList.remove("pulse");
+    $("play").disabled = true;
+    hint("");
+    make();
   };
-
   $("play").onclick = () => {
     if (!ctrl || !wantUri) return;
     H.auto = true; playSent = true;
@@ -106,3 +127,4 @@
 
   window.Hitster = H;
 })();
+
