@@ -1,4 +1,4 @@
-/* Scanpagina: webcam -> jsQR -> Hitster.load(...). Eén tik start de camera en maakt de speler klaar. */
+﻿/* Scanpagina: webcam -> jsQR -> Hitster.load(...). Eén tik start de camera en maakt de speler klaar. */
 (function () {
   const $ = id => document.getElementById(id);
   const video = $("video"), canvas = document.createElement("canvas");
@@ -7,16 +7,23 @@
 
   const msg = t => { $("scanmsg").textContent = t; };
 
+  const ID = /^[A-Za-z0-9]{22}$/;
+  // Accepteert onze kaart-URL (elk pad, ?t=), een Spotify-tracklink/-URI of alleen het 22-tekens ID.
   function parse(data) {
+    const s = String(data || "").trim();
+    if (ID.test(s)) return {t: s};
+    let m = s.match(/spotify:track:([A-Za-z0-9]{22})/i) || s.match(/open\.spotify\.com\/(?:[\w-]+\/)?track\/([A-Za-z0-9]{22})/i);
+    if (m) return {t: m[1]};
     try {
-      const u = new URL(data);
-      if (!/\/p\/?$/.test(u.pathname)) return null;
-      const t = u.searchParams.get("t") || "";
-      if (!Hitster.SP_OK.test(t)) return null;
-      return {t};
-    } catch (e) { return null; }
+      const u = new URL(s);
+      const t = (u.searchParams.get("t") || "").trim();
+      if (ID.test(t)) return {t};
+    } catch (e) {}
+    m = s.match(/[?&]t=([A-Za-z0-9]{22})(?![A-Za-z0-9])/);
+    return m ? {t: m[1]} : null;
   }
 
+  let lastBad = "";
   function tick() {
     if (!scanning) return;
     if (video.readyState === video.HAVE_ENOUGH_DATA && video.videoWidth) {
@@ -29,7 +36,7 @@
       if (code && code.data) {
         const r = parse(code.data);
         if (r) { found(r); return; }
-        msg("Dit is geen Hitster-kaartje, probeer een ander kaartje.");
+        if (code.data !== lastBad) { lastBad = code.data; msg("Dit is geen Hitster-kaartje. Gelezen: \u201c" + code.data.slice(0, 60) + "\u201d. Probeer een ander kaartje."); }
       }
     }
     setTimeout(() => requestAnimationFrame(tick), 120);
@@ -77,3 +84,4 @@
     if (stream) { video.play(); scanning = true; tick(); } else start();
   };
 })();
+
