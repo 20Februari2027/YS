@@ -3,7 +3,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="robots" content="noindex"><meta name="theme-color" content="#F5F7F2">
 <title>Y &amp; S &middot; 20.02.2027</title>
-<link rel="stylesheet" href="../assets/stijl.css?v=8e42bdac">
+<link rel="stylesheet" href="../assets/stijl.css?v=b8c63d66">
 <link rel="preload" href="../assets/fonts/cormorant.woff2" as="font" type="font/woff2" crossorigin>
 </head><body>
 <div id="cover">
@@ -12,9 +12,8 @@
 <div id="hint">Laden...</div>
 
 </div>
-<script src="../assets/speler.js?v=8e42bdac"></script>
+<script src="../assets/speler.js?v=b8c63d66"></script>
 <script>
 const Q = new URLSearchParams(location.search);
-const a = Q.get("a");
-Hitster.load(a || (Q.get("t") ? "oud" : ""), true);
+Hitster.load({k: Q.get("k"), a: Q.get("a"), t: Q.get("t")}, true);
 </script></body></html>

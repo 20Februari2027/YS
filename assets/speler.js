@@ -1,4 +1,4 @@
-/* Spoilervrije speler: één <audio>-element met de 30 s Spotify-preview (mp3). Geen iframe, geen embed.
+﻿/* Spoilervrije speler: één <audio>-element met de 30 s Spotify-preview (mp3). Geen iframe, geen embed.
    Het element wordt nooit vervangen. In de eerste tik (Hitster.unlock) speelt het element synchroon een
    stil geluidje: daarmee mag iOS het element daarna ook zonder tik van bron laten wisselen en afspelen. */
 (function () {
@@ -30,7 +30,7 @@
 
   const audio = new Audio();
   audio.preload = "auto"; audio.setAttribute("playsinline", "");
-  let wantA = "", token = 0, unlocked = false, tHint = null, tLoad = 0;
+  let wantA = "", srcs = [], srcIdx = 0, token = 0, unlocked = false, tHint = null, tLoad = 0;
   const SILENT = silentWav();
 
   const hint = t => { $("hint").textContent = t; };
@@ -39,7 +39,7 @@
     $("play").innerHTML = playing ? "&#10074;&#10074;" : "&#9654;";
     if (playing) { $("play").classList.remove("pulse"); clearTimeout(tHint); hint("Je hoort een preview van 30 seconden."); }
   }
-  const isReal = () => !!wantA && audio.src.indexOf(wantA) > -1;
+  const isReal = () => !!wantA && srcs.length > 0 && audio.src === srcs[srcIdx].u;
 
   ["loadstart", "loadedmetadata", "canplay", "waiting", "stalled", "ended"].forEach(ev =>
     audio.addEventListener(ev, () => { if (isReal() || ev === "loadstart") dbg("audio " + ev + " t=" + audio.currentTime.toFixed(2)); }));
@@ -50,10 +50,20 @@
   });
   audio.addEventListener("pause", () => { if (isReal()) { dbg("pause t=" + audio.currentTime.toFixed(2)); setUi(false); } });
   audio.addEventListener("ended", () => { if (isReal()) setUi(false); });
+  function tryNext(tok) {
+    if (tok !== token || srcIdx + 1 >= srcs.length) return false;
+    srcIdx++;
+    dbg("bron " + srcs[srcIdx].b + " (reserve)");
+    audio.src = srcs[srcIdx].u;
+    try { audio.currentTime = 0; } catch (e) {}
+    startPlay(tok, "reserve");
+    return true;
+  }
   audio.addEventListener("error", () => {
     if (!isReal()) return;
     const c = audio.error ? audio.error.code : "?";
-    dbg("audio fout code " + c);
+    dbg("audio fout code " + c + " bij bron " + srcs[srcIdx].b);
+    if (tryNext(token)) return;
     hint("Dit fragment kan niet worden afgespeeld (fout " + c + "). Controleer je verbinding of scan het kaartje opnieuw.");
   });
 
@@ -79,34 +89,74 @@
     } catch (e) { unlocked = false; dbg("unlock fout " + e); }
   };
 
-  H.load = function (a, auto) {
+  // Kaartcode -> preview-code via kaarten.json (zonder titels); altijd vers ophalen zodat een site-update direct werkt.
+  let map = null, mapP = null;
+  function getMap() {
+    if (!mapP) {
+      mapP = fetch("../kaarten.json?x=" + Date.now(), {cache: "no-store"})
+        .then(r => { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
+        .then(m => { map = m; dbg("kaarten.json geladen: " + Object.keys(m).length + " codes"); return m; })
+        .catch(e => { mapP = null; dbg("kaarten.json fout: " + e); throw e; });
+    }
+    return mapP;
+  }
+  getMap().catch(() => {});
+
+  H.load = function (arg, auto) {
+    if (typeof arg === "string") arg = {a: arg};
+    arg = arg || {};
     clearTimeout(tHint);
     token++;
     const tok = token;
     try { audio.pause(); } catch (e) {}
     setUi(false);
     $("play").classList.remove("pulse");
-    if (!A_OK.test(a || "")) {
-      wantA = ""; $("play").disabled = true;
+    wantA = ""; srcs = []; $("play").disabled = true;
+    if (arg.k) {
+      const k = String(arg.k);
+      const use = m => {
+        if (tok !== token) return;
+        if (m && m[k]) go(m[k], auto, tok, k);
+        else { dbg("kaartcode onbekend: " + k); hint("Dit kaartje is onbekend. Is de site al bijgewerkt met dit kaartje?"); }
+      };
+      if (map) { use(map); return; }
+      hint("Laden...");
+      getMap().then(use, () => { if (tok === token) hint("De kaartenlijst kon niet worden geladen. Controleer je internetverbinding en scan opnieuw."); });
+      return;
+    }
+    go(arg.a || (arg.t ? "oud" : ""), auto, tok);
+  };
+
+  // Kaartvermelding (lijst van {b, u}; oude vorm: alleen een Spotify-previewcode) naar bronnenlijst.
+  function toSources(a) {
+    if (Array.isArray(a)) return a.filter(x => x && /^https:\/\//.test(x.u || ""));
+    if (typeof a === "string" && A_OK.test(a)) return [{b: "spotify", u: PREVIEW + a}];
+    return [];
+  }
+
+  function go(a, auto, tok, k) {
+    const list = toSources(a);
+    if (!list.length) {
+      wantA = ""; srcs = []; $("play").disabled = true;
       hint(a === "oud" ? "Dit is een oud kaartje zonder geluidscode. Print de kaartjes opnieuw." : "Dit kaartje heeft geen geldige code.");
       return;
     }
-    wantA = a; H.auto = !!auto;
+    wantA = k || String(a); srcs = list; srcIdx = 0; H.auto = !!auto;
     $("play").disabled = false;
     hint("Laden...");
     tLoad = performance.now();
-    dbg("src " + a.slice(0, 6) + "… (auto=" + H.auto + ")");
-    audio.src = PREVIEW + a;
+    dbg("bron " + list[0].b + " " + list[0].u.slice(-14) + " (auto=" + H.auto + ", " + list.length + " bron(nen))");
+    audio.src = list[0].u;
     try { audio.currentTime = 0; } catch (e) {}
     if (H.auto) startPlay(tok, "scan"); else tapHint();
     tHint = setTimeout(() => { if (tok === token && audio.paused) { dbg("speelt niet na 1,5 s: tikhint"); tapHint(); } }, 1500);
-  };
+  }
 
   // 'Scan volgende': alleen pauzeren en vergeten; het element blijft bestaan (en ontgrendeld).
   H.stop = function () {
     clearTimeout(tHint);
     token++;
-    wantA = ""; H.auto = false;
+    wantA = ""; srcs = []; H.auto = false;
     try { audio.pause(); } catch (e) {}
     dbg("stop: pause");
     setUi(false);
@@ -126,3 +176,5 @@
   };
   window.Hitster = H;
 })();
+
+

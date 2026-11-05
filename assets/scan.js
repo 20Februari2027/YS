@@ -9,14 +9,16 @@
   const log = m => { if (window.Hitster && Hitster.log) Hitster.log(m); };
 
   const CODE = /^[A-Za-z0-9]{20,64}$/;
-  // Kaart-QR: <site>/p/?a=<code>. Oude kaartjes (?t=<Spotify-ID>) hebben geen geluidscode.
+  // Kaart-QR: <site>/p/?k=<kaartcode> (opzoeken in kaarten.json). ?a=<preview-code> werkt als fallback; ?t= is een oud kaartje.
   function parse(data) {
     const s = String(data || "").trim();
-    let m = s.match(/[?&]a=([A-Za-z0-9]{20,64})(?![A-Za-z0-9])/);
-    if (m) return {a: m[1]};
+    let m = s.match(/[?&]k=([A-Za-z0-9]{4,12})(?![A-Za-z0-9])/);
+    if (m) return {k: m[1], id: m[1]};
+    m = s.match(/[?&]a=([A-Za-z0-9]{20,64})(?![A-Za-z0-9])/);
+    if (m) return {a: m[1], id: m[1]};
     m = s.match(/p\.scdn\.co\/mp3-preview\/([A-Za-z0-9]{20,64})/i);
-    if (m) return {a: m[1]};
-    if (/[?&]t=[A-Za-z0-9]{22}(?![A-Za-z0-9])/.test(s)) return {a: "oud"};
+    if (m) return {a: m[1], id: m[1]};
+    if (/[?&]t=[A-Za-z0-9]{22}(?![A-Za-z0-9])/.test(s)) return {a: "oud", id: "oud"};
     return null;
   }
 
@@ -67,11 +69,11 @@
       if (data) {
         noQrSince = 0;
         const r = parse(data);
-        if (r && blocked && r.a === lastId) {
-          if (lastBad !== "same") { lastBad = "same"; log("genegeerd: zelfde kaartje nog in beeld " + r.a.slice(0, 6)); }
+        if (r && blocked && r.id === lastId) {
+          if (lastBad !== "same") { lastBad = "same"; log("genegeerd: zelfde kaartje nog in beeld " + r.id.slice(0, 6)); }
           msg("Haal het vorige kaartje weg en houd een nieuw kaartje voor de camera.");
         } else if (r) {
-          log("geaccepteerd " + r.a.slice(0, 6) + (blocked ? " (ander kaartje)" : ""));
+          log("geaccepteerd " + r.id.slice(0, 6) + (blocked ? " (ander kaartje)" : ""));
           found(r); return;
         } else if (data !== lastBad) {
           lastBad = data;
@@ -93,8 +95,8 @@
   function found(r) {
     scanning = false;
     $("scanner").hidden = true;
-    lastId = r.a; blocked = false;
-    Hitster.load(r.a, true);
+    lastId = r.id; blocked = false;
+    Hitster.load(r, true);
   }
 
   async function start() {
@@ -142,4 +144,6 @@
   };
   window.HitsterScan = {parse};
 })();
+
+
 
