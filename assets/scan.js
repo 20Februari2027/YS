@@ -1,18 +1,19 @@
+/* Scanpagina: webcam -> jsQR -> Hitster.load(...). Eén tik start de camera en maakt de speler klaar. */
 (function () {
   const $ = id => document.getElementById(id);
   const video = $("video"), canvas = document.createElement("canvas");
   const ctx = canvas.getContext("2d", {willReadFrequently: true});
   let stream = null, scanning = false;
 
-  function msg(t) { $("scanmsg").textContent = t; }
+  const msg = t => { $("scanmsg").textContent = t; };
 
   function parse(data) {
     try {
       const u = new URL(data);
       if (!/\/p\/?$/.test(u.pathname)) return null;
-      const t = u.searchParams.get("t") || "", y = u.searchParams.get("y") || "";
-      if (!(Hitster.SP_OK.test(t) || Hitster.YT_OK.test(y))) return null;
-      return {t, y};
+      const t = u.searchParams.get("t") || "";
+      if (!Hitster.SP_OK.test(t)) return null;
+      return {t};
     } catch (e) { return null; }
   }
 
@@ -36,12 +37,13 @@
 
   function found(r) {
     scanning = false;
+    video.pause();
     $("scanner").hidden = true;
-    $("cover").hidden = false;
-    Hitster.load(r.t, r.y, true);
+    Hitster.load(r.t, true);
   }
 
   async function start() {
+    Hitster.prepare();
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
       msg("Camera is niet beschikbaar. Open deze pagina via https:// of http://localhost.");
       return;
@@ -51,6 +53,7 @@
         try {
           stream = await navigator.mediaDevices.getUserMedia({video: {facingMode: "environment"}, audio: false});
         } catch (e) {
+          if (e && e.name === "NotAllowedError") throw e;
           stream = await navigator.mediaDevices.getUserMedia({video: true, audio: false});
         }
         video.srcObject = stream;
@@ -69,8 +72,8 @@
   $("startcam").onclick = start;
   $("next").onclick = () => {
     Hitster.stop();
-    $("cover").hidden = true; $("scanner").hidden = false;
+    $("scanner").hidden = false;
     msg("Houd een kaartje voor de camera.");
-    if (stream) { scanning = true; tick(); } else start();
+    if (stream) { video.play(); scanning = true; tick(); } else start();
   };
 })();
