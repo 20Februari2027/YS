@@ -1,154 +1,128 @@
-﻿/* Spoilervrije speler: Spotify-embed (iFrame API, 30 s preview zonder login), verborgen onder #cover.
-   Eén controller wordt hergebruikt. Elke load krijgt een token; play() wordt pas gestuurd als de embed
-   de nieuwe URI meldt (playback_update.playingURI) of na een korte time-out, en alleen voor het actuele token.
-   Zo speelt een tweede scan niet het vorige nummer en start 'Scan volgende' niets. */
+/* Spoilervrije speler: één <audio>-element met de 30 s Spotify-preview (mp3). Geen iframe, geen embed.
+   Het element wordt nooit vervangen. In de eerste tik (Hitster.unlock) speelt het element synchroon een
+   stil geluidje: daarmee mag iOS het element daarna ook zonder tik van bron laten wisselen en afspelen. */
 (function () {
   const $ = id => document.getElementById(id);
-  const SP_OK = /^[A-Za-z0-9]{22}$/;
-  const WARM = "5kiJ9x6eX37H5J9lyyXkua"; // stille warm-up-track "Silence 30sec" (mag niet op een kaartje staan; hitster.py controleert dat)
-  const WARM_URI = "spotify:track:" + WARM;
-  let ctrl = null, loading = false, ready = false, readyN = 0;
-  let wantUri = "", token = 0, playSent = false, playing = false;
-  let tTap = null, tPlay = null, embedUri = "", unlocking = false;
-  const H = {SP_OK};
+  const A_OK = /^[A-Za-z0-9]{20,64}$/;
+  const PREVIEW = "https://p.scdn.co/mp3-preview/";
+  const H = {A_OK, auto: false};
 
-  const hint = t => { $("hint").textContent = t; };
-  const tapHint = () => { $("play").classList.add("pulse"); hint("Tik op de grote knop om af te spelen."); };
-  const clearTimers = () => { clearTimeout(tTap); clearTimeout(tPlay); };
-
-  function setPlayingUi(v) {
-    playing = v;
-    $("play").innerHTML = v ? "&#10074;&#10074;" : "&#9654;";
-    if (v) { $("play").classList.remove("pulse"); clearTimeout(tTap); hint("Je hoort een preview van 30 seconden."); }
-  }
-
-  function sendPlay(tok) {
-    if (tok !== token || !wantUri || !ctrl) return;
-    playSent = true;
-    dbg("play " + wantUri.slice(-4)); try { ctrl.play(); } catch (e) {}
-    clearTimeout(tTap);
-    tTap = setTimeout(() => { if (tok === token && !playing) { dbg("autoplay geblokkeerd? speelt niet na 2 s: tikhint"); tapHint(); } }, 2000);
-  }
-
-  // Laad de actuele wens in de (bestaande) controller en start daarna pas play().
-  function apply() {
-    if (!ready || !ctrl) return;
-    if (!wantUri) return;
-    const tok = token;
-    $("play").disabled = false;
-    if (embedUri === wantUri) {
-      // Staat al in de embed (bv. zelfde nummer opnieuw): niet wachten op ready, direct vanaf 0 spelen.
-      playSent = false; clearTimeout(tPlay);
-      if (H.auto) { try { ctrl.seek(0); } catch (e) {} sendPlay(tok); } else tapHint();
-      return;
-    }
-    if (embedUri !== wantUri) {
-      embedUri = wantUri;
-      dbg("loadUri " + wantUri.slice(-4)); try { ctrl.loadUri(wantUri); } catch (e) {}
-      playSent = false;
-      clearTimeout(tPlay);
-      // Time-out als de embed geen playingURI meldt.
-      tPlay = setTimeout(() => { if (!playSent) sendPlay(tok); }, 900);
-    }
-    if (!H.auto) tapHint();
-  }
-
-  // De echte API vuurt "ready" na elke loadUri opnieuw af: nooit opnieuw laden om een ready, alleen verder gaan.
-  function onReady() {
-    if (!wantUri) return;
-    if (embedUri !== wantUri) { apply(); return; }
-    $("play").disabled = false;
-    if (H.auto && !playSent) { clearTimeout(tPlay); sendPlay(token); }
-    else if (!H.auto) tapHint();
-  }
-
-  function onUpdate(e) {
-    const d = e.data || {};
-    const uri = d.playingURI || "";
-    // Updates van een ander (oud/rust-)nummer negeren.
-    if (wantUri && uri && uri !== wantUri) return;
-    if (!wantUri) {
-      if (unlocking && !d.isPaused) { unlocking = false; dbg("ontgrendeld: pauzeer warm-up"); try { ctrl.pause(); } catch (e) {} }
-      setPlayingUi(false); return;
-    }
-    if (!d.isPaused) { setPlayingUi(true); return; }
-    if (!playSent && H.auto && uri === wantUri) { clearTimeout(tPlay); sendPlay(token); return; }
-    setPlayingUi(false);
-  }
-
-  let api = null;
   const dbg = (function () {
     if (!/[?&]debug=1/.test(location.search)) return () => {};
     const el = document.createElement("pre");
     el.style.cssText = "position:fixed;left:0;right:0;top:0;max-height:38vh;overflow:auto;margin:0;padding:6px;z-index:99;background:rgba(30,46,30,.92);color:#E8EFE4;font:10px/1.3 monospace;text-align:left;white-space:pre-wrap";
     document.body.appendChild(el);
-    return m => { el.textContent += ((performance.now() / 1000).toFixed(1) + " " + m + "\n"); el.scrollTop = el.scrollHeight; };
+    return m => { el.textContent += ((performance.now() / 1000).toFixed(2) + " " + m + "\n"); el.scrollTop = el.scrollHeight; };
   })();
   H.log = dbg;
 
-  function make() {
-    if (!api || ctrl) return;
-    const uri = wantUri || WARM_URI;
-    api.createController($("sp"), {uri, width: "100%", height: 152}, c => {
-      ctrl = c; embedUri = uri; dbg("controller gemaakt " + uri.slice(-4));
-      c.addListener("ready", () => { readyN++; ready = true; dbg("ready (" + readyN + "e)"); onReady(); });
-      c.addListener("playback_update", e => { const d = e.data || {}; dbg("update " + String(d.playingURI || "").slice(-4) + " paused=" + d.isPaused); onUpdate(e); });
-    });
+  // 0,25 s stilte als WAV (8 kHz, 8 bit mono), zodat er geen extra bestand nodig is.
+  function silentWav() {
+    const n = 2000, b = new Uint8Array(44 + n);
+    const w = (o, s) => { for (let i = 0; i < s.length; i++) b[o + i] = s.charCodeAt(i); };
+    const u32 = (o, v) => { b[o] = v & 255; b[o + 1] = (v >> 8) & 255; b[o + 2] = (v >> 16) & 255; b[o + 3] = v >>> 24; };
+    w(0, "RIFF"); u32(4, 36 + n); w(8, "WAVEfmt "); u32(16, 16);
+    b[20] = 1; b[22] = 1; u32(24, 8000); u32(28, 8000); b[32] = 1; b[34] = 8;
+    w(36, "data"); u32(40, n); b.fill(128, 44);
+    let s = ""; for (let i = 0; i < b.length; i++) s += String.fromCharCode(b[i]);
+    return "data:audio/wav;base64," + btoa(s);
   }
 
-  function ensure() {
-    if (ctrl) return;
-    if (api) { make(); return; }
-    if (loading) return;
-    loading = true;
-    window.onSpotifyIframeApiReady = a => { api = a; make(); };
-    const s = document.createElement("script");
-    s.src = "https://open.spotify.com/embed/iframe-api/v1"; s.async = true;
-    document.body.appendChild(s);
+  const audio = new Audio();
+  audio.preload = "auto"; audio.setAttribute("playsinline", "");
+  let wantA = "", token = 0, unlocked = false, tHint = null, tLoad = 0;
+  const SILENT = silentWav();
+
+  const hint = t => { $("hint").textContent = t; };
+  const tapHint = () => { $("play").classList.add("pulse"); hint("Tik op de grote knop om af te spelen."); };
+  function setUi(playing) {
+    $("play").innerHTML = playing ? "&#10074;&#10074;" : "&#9654;";
+    if (playing) { $("play").classList.remove("pulse"); clearTimeout(tHint); hint("Je hoort een preview van 30 seconden."); }
   }
-  // Moet vanuit een tik worden aangeroepen.
-  H.prepare = ensure;
-  H.auto = false;
+  const isReal = () => !!wantA && audio.src.indexOf(wantA) > -1;
 
-  H.load = function (t, auto) {
-    clearTimers();
-    token++;
-    try { if (ctrl) ctrl.pause(); } catch (e) {}
-    setPlayingUi(false);
-    if (!SP_OK.test(t || "")) { wantUri = ""; $("play").disabled = true; hint("Dit kaartje heeft geen geldige link."); return; }
-    wantUri = "spotify:track:" + t; H.auto = !!auto; playSent = false; unlocking = false;
-    $("play").disabled = true; $("play").classList.remove("pulse");
-    hint("Laden...");
-    ensure(); apply();
-  };
+  ["loadstart", "loadedmetadata", "canplay", "waiting", "stalled", "ended"].forEach(ev =>
+    audio.addEventListener(ev, () => { if (isReal() || ev === "loadstart") dbg("audio " + ev + " t=" + audio.currentTime.toFixed(2)); }));
+  audio.addEventListener("playing", () => {
+    if (!isReal()) return;
+    dbg("playing t=" + audio.currentTime.toFixed(2) + " (" + Math.round(performance.now() - tLoad) + " ms na load)");
+    setUi(true);
+  });
+  audio.addEventListener("pause", () => { if (isReal()) { dbg("pause t=" + audio.currentTime.toFixed(2)); setUi(false); } });
+  audio.addEventListener("ended", () => { if (isReal()) setUi(false); });
+  audio.addEventListener("error", () => {
+    if (!isReal()) return;
+    const c = audio.error ? audio.error.code : "?";
+    dbg("audio fout code " + c);
+    hint("Dit fragment kan niet worden afgespeeld (fout " + c + "). Controleer je verbinding of scan het kaartje opnieuw.");
+  });
 
-  // Binnen de eerste tik: speel de warm-up synchroon (ontgrendelt audio op iOS); onUpdate pauzeert zodra hij speelt.
+  function startPlay(tok, from) {
+    if (tok !== token) return;
+    let p;
+    try { p = audio.play(); } catch (e) { p = Promise.reject(e); }
+    if (p && p.then) p.then(
+      () => dbg("play ok (" + from + ") t=" + audio.currentTime.toFixed(2)),
+      e => { if (tok !== token) return; dbg("play GEBLOKKEERD (" + from + "): " + (e && e.name)); tapHint(); });
+  }
+
+  // Moet synchroon in een tik worden aangeroepen (Start camera).
+  H.prepare = function () {};
   H.unlock = function () {
-    if (!ctrl || unlocking || wantUri) return;
-    unlocking = true; dbg("unlock: warm-up play in tik");
-    try { ctrl.play(); } catch (e) {}
+    if (unlocked) return;
+    unlocked = true;
+    dbg("unlock: stil geluid in tik");
+    try {
+      audio.src = SILENT; audio.muted = false; audio.volume = 1;
+      const p = audio.play();
+      if (p && p.then) p.then(() => dbg("unlock ok"), e => { unlocked = false; dbg("unlock GEBLOKKEERD: " + (e && e.name)); });
+    } catch (e) { unlocked = false; dbg("unlock fout " + e); }
   };
 
-  // 'Scan volgende': alleen pauzeren en annuleren. Dezelfde controller blijft bestaan (destroy zou de iOS-ontgrendeling verliezen).
-  H.stop = function () {
-    clearTimers();
+  H.load = function (a, auto) {
+    clearTimeout(tHint);
     token++;
-    wantUri = ""; playSent = false; H.auto = false; unlocking = false;
-    dbg("stop: pause (embed blijft bestaan)");
-    try { if (ctrl) ctrl.pause(); } catch (e) {}
-    setPlayingUi(false);
+    const tok = token;
+    try { audio.pause(); } catch (e) {}
+    setUi(false);
+    $("play").classList.remove("pulse");
+    if (!A_OK.test(a || "")) {
+      wantA = ""; $("play").disabled = true;
+      hint(a === "oud" ? "Dit is een oud kaartje zonder geluidscode. Print de kaartjes opnieuw." : "Dit kaartje heeft geen geldige code.");
+      return;
+    }
+    wantA = a; H.auto = !!auto;
+    $("play").disabled = false;
+    hint("Laden...");
+    tLoad = performance.now();
+    dbg("src " + a.slice(0, 6) + "… (auto=" + H.auto + ")");
+    audio.src = PREVIEW + a;
+    try { audio.currentTime = 0; } catch (e) {}
+    if (H.auto) startPlay(tok, "scan"); else tapHint();
+    tHint = setTimeout(() => { if (tok === token && audio.paused) { dbg("speelt niet na 1,5 s: tikhint"); tapHint(); } }, 1500);
+  };
+
+  // 'Scan volgende': alleen pauzeren en vergeten; het element blijft bestaan (en ontgrendeld).
+  H.stop = function () {
+    clearTimeout(tHint);
+    token++;
+    wantA = ""; H.auto = false;
+    try { audio.pause(); } catch (e) {}
+    dbg("stop: pause");
+    setUi(false);
     $("play").classList.remove("pulse");
     $("play").disabled = true;
     hint("");
-  };  $("play").onclick = () => {
-    if (!ctrl || !wantUri) return;
-    H.auto = true; playSent = true;
-    dbg("klik: " + (playing ? "pause" : "play"));
-    try { if (playing) ctrl.pause(); else ctrl.play(); } catch (e) {}
+  };
+
+  $("play").onclick = () => {
+    if (!wantA) return;
+    H.auto = true; token++;
+    dbg("klik: " + (audio.paused ? "play" : "pause") + " t=" + audio.currentTime.toFixed(2));
+    if (!audio.paused) { try { audio.pause(); } catch (e) {} return; }
+    if (audio.ended) { try { audio.currentTime = 0; } catch (e) {} }
+    startPlay(token, "klik");
+    clearTimeout(tHint);
   };
   window.Hitster = H;
 })();
-
-
-
-
