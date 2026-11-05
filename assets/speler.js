@@ -5,11 +5,11 @@
 (function () {
   const $ = id => document.getElementById(id);
   const SP_OK = /^[A-Za-z0-9]{22}$/;
-  const WARM = "4cOdK2wGLETKBW3PvgPWqT"; // neutrale track: start-URI en 'rust'-stand
+  const WARM = "5kiJ9x6eX37H5J9lyyXkua"; // stille warm-up-track "Silence 30sec" (mag niet op een kaartje staan; hitster.py controleert dat)
   const WARM_URI = "spotify:track:" + WARM;
   let ctrl = null, loading = false, ready = false, readyN = 0;
-  let wantUri = "", token = 0, playSent = false, playing = false, loadedUri = "";
-  let tTap = null, tPlay = null;
+  let wantUri = "", token = 0, playSent = false, playing = false;
+  let tTap = null, tPlay = null, embedUri = "", unlocking = false;
   const H = {SP_OK};
 
   const hint = t => { $("hint").textContent = t; };
@@ -27,7 +27,7 @@
     playSent = true;
     dbg("play " + wantUri.slice(-4)); try { ctrl.play(); } catch (e) {}
     clearTimeout(tTap);
-    tTap = setTimeout(() => { if (tok === token && !playing) tapHint(); }, 3000);
+    tTap = setTimeout(() => { if (tok === token && !playing) { dbg("autoplay geblokkeerd? speelt niet na 2 s: tikhint"); tapHint(); } }, 2000);
   }
 
   // Laad de actuele wens in de (bestaande) controller en start daarna pas play().
@@ -36,8 +36,14 @@
     if (!wantUri) return;
     const tok = token;
     $("play").disabled = false;
-    if (loadedUri !== wantUri) {
-      loadedUri = wantUri;
+    if (embedUri === wantUri) {
+      // Staat al in de embed (bv. zelfde nummer opnieuw): niet wachten op ready, direct vanaf 0 spelen.
+      playSent = false; clearTimeout(tPlay);
+      if (H.auto) { try { ctrl.seek(0); } catch (e) {} sendPlay(tok); } else tapHint();
+      return;
+    }
+    if (embedUri !== wantUri) {
+      embedUri = wantUri;
       dbg("loadUri " + wantUri.slice(-4)); try { ctrl.loadUri(wantUri); } catch (e) {}
       playSent = false;
       clearTimeout(tPlay);
@@ -50,7 +56,7 @@
   // De echte API vuurt "ready" na elke loadUri opnieuw af: nooit opnieuw laden om een ready, alleen verder gaan.
   function onReady() {
     if (!wantUri) return;
-    if (loadedUri !== wantUri) { apply(); return; }
+    if (embedUri !== wantUri) { apply(); return; }
     $("play").disabled = false;
     if (H.auto && !playSent) { clearTimeout(tPlay); sendPlay(token); }
     else if (!H.auto) tapHint();
@@ -61,9 +67,13 @@
     const uri = d.playingURI || "";
     // Updates van een ander (oud/rust-)nummer negeren.
     if (wantUri && uri && uri !== wantUri) return;
-    if (!wantUri) { setPlayingUi(false); return; }
+    if (!wantUri) {
+      if (unlocking && !d.isPaused) { unlocking = false; dbg("ontgrendeld: pauzeer warm-up"); try { ctrl.pause(); } catch (e) {} }
+      setPlayingUi(false); return;
+    }
+    if (!d.isPaused) { setPlayingUi(true); return; }
     if (!playSent && H.auto && uri === wantUri) { clearTimeout(tPlay); sendPlay(token); return; }
-    setPlayingUi(!d.isPaused);
+    setPlayingUi(false);
   }
 
   let api = null;
@@ -80,7 +90,7 @@
     if (!api || ctrl) return;
     const uri = wantUri || WARM_URI;
     api.createController($("sp"), {uri, width: "100%", height: 152}, c => {
-      ctrl = c; loadedUri = uri; dbg("controller gemaakt " + uri.slice(-4));
+      ctrl = c; embedUri = uri; dbg("controller gemaakt " + uri.slice(-4));
       c.addListener("ready", () => { readyN++; ready = true; dbg("ready (" + readyN + "e)"); onReady(); });
       c.addListener("playback_update", e => { const d = e.data || {}; dbg("update " + String(d.playingURI || "").slice(-4) + " paused=" + d.isPaused); onUpdate(e); });
     });
@@ -106,29 +116,31 @@
     try { if (ctrl) ctrl.pause(); } catch (e) {}
     setPlayingUi(false);
     if (!SP_OK.test(t || "")) { wantUri = ""; $("play").disabled = true; hint("Dit kaartje heeft geen geldige link."); return; }
-    wantUri = "spotify:track:" + t; H.auto = !!auto; playSent = false;
+    wantUri = "spotify:track:" + t; H.auto = !!auto; playSent = false; unlocking = false;
     $("play").disabled = true; $("play").classList.remove("pulse");
     hint("Laden...");
     ensure(); apply();
   };
 
-  // 'Scan volgende': alles annuleren, embed pauzeren en weggooien; direct (binnen de tik) een nieuwe, stille embed aanmaken.
+  // Binnen de eerste tik: speel de warm-up synchroon (ontgrendelt audio op iOS); onUpdate pauzeert zodra hij speelt.
+  H.unlock = function () {
+    if (!ctrl || unlocking || wantUri) return;
+    unlocking = true; dbg("unlock: warm-up play in tik");
+    try { ctrl.play(); } catch (e) {}
+  };
+
+  // 'Scan volgende': alleen pauzeren en annuleren. Dezelfde controller blijft bestaan (destroy zou de iOS-ontgrendeling verliezen).
   H.stop = function () {
     clearTimers();
     token++;
-    wantUri = ""; playSent = false; H.auto = false;
-    dbg("stop: pause + destroy embed");
+    wantUri = ""; playSent = false; H.auto = false; unlocking = false;
+    dbg("stop: pause (embed blijft bestaan)");
     try { if (ctrl) ctrl.pause(); } catch (e) {}
-    try { if (ctrl && ctrl.destroy) ctrl.destroy(); } catch (e) {}
-    ctrl = null; ready = false; loadedUri = "";
-    $("under").innerHTML = '<div id="sp"></div>';
     setPlayingUi(false);
     $("play").classList.remove("pulse");
     $("play").disabled = true;
     hint("");
-    make();
-  };
-  $("play").onclick = () => {
+  };  $("play").onclick = () => {
     if (!ctrl || !wantUri) return;
     H.auto = true; playSent = true;
     dbg("klik: " + (playing ? "pause" : "play"));
@@ -136,5 +148,7 @@
   };
   window.Hitster = H;
 })();
+
+
 
 

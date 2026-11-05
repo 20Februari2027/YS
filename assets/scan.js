@@ -72,7 +72,7 @@
     Hitster.load(r.t, true);
   }
   async function start() {
-    Hitster.prepare();
+    Hitster.prepare(); Hitster.unlock();
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
       msg("Camera is niet beschikbaar. Open deze pagina via https:// of http://localhost.");
       return;
@@ -98,6 +98,7 @@
     }
   }
 
+  Hitster.prepare();
   $("startcam").onclick = start;
   $("next").onclick = () => {
     log("scan volgende getikt");
@@ -108,3 +109,4 @@
     if (stream) { video.play(); scanning = true; tick(); } else start();
   };
 })();
+
