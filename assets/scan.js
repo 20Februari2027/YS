@@ -23,7 +23,7 @@
     return m ? {t: m[1]} : null;
   }
 
-  let lastBad = "";
+  let lastBad = "", lastId = "", ignoreId = "", ignoreUntil = 0;
   function tick() {
     if (!scanning) return;
     if (video.readyState === video.HAVE_ENOUGH_DATA && video.videoWidth) {
@@ -35,7 +35,8 @@
       const code = jsQR(img.data, img.width, img.height, {inversionAttempts: "attemptBoth"});
       if (code && code.data) {
         const r = parse(code.data);
-        if (r) { found(r); return; }
+        if (r && r.t === ignoreId && Date.now() < ignoreUntil) { /* zelfde kaartje nog in beeld */ }
+        else if (r) { found(r); return; }
         if (code.data !== lastBad) { lastBad = code.data; msg("Dit is geen Hitster-kaartje. Gelezen: \u201c" + code.data.slice(0, 60) + "\u201d. Probeer een ander kaartje."); }
       }
     }
@@ -46,6 +47,7 @@
     scanning = false;
     video.pause();
     $("scanner").hidden = true;
+    lastId = r.t;
     Hitster.load(r.t, true);
   }
 
@@ -79,6 +81,8 @@
   $("startcam").onclick = start;
   $("next").onclick = () => {
     Hitster.stop();
+    // Het kaartje dat net gescand is nog even negeren, zodat het niet direct opnieuw start.
+    ignoreId = lastId; ignoreUntil = Date.now() + 2500; lastBad = "";
     $("scanner").hidden = false;
     msg("Houd een kaartje voor de camera.");
     if (stream) { video.play(); scanning = true; tick(); } else start();
