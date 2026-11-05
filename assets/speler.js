@@ -7,7 +7,7 @@
   const SP_OK = /^[A-Za-z0-9]{22}$/;
   const WARM = "4cOdK2wGLETKBW3PvgPWqT"; // neutrale track: start-URI en 'rust'-stand
   const WARM_URI = "spotify:track:" + WARM;
-  let ctrl = null, loading = false, ready = false;
+  let ctrl = null, loading = false, ready = false, readyN = 0;
   let wantUri = "", token = 0, playSent = false, playing = false, loadedUri = "";
   let tTap = null, tPlay = null;
   const H = {SP_OK};
@@ -47,6 +47,15 @@
     if (!H.auto) tapHint();
   }
 
+  // De echte API vuurt "ready" na elke loadUri opnieuw af: nooit opnieuw laden om een ready, alleen verder gaan.
+  function onReady() {
+    if (!wantUri) return;
+    if (loadedUri !== wantUri) { apply(); return; }
+    $("play").disabled = false;
+    if (H.auto && !playSent) { clearTimeout(tPlay); sendPlay(token); }
+    else if (!H.auto) tapHint();
+  }
+
   function onUpdate(e) {
     const d = e.data || {};
     const uri = d.playingURI || "";
@@ -72,7 +81,7 @@
     const uri = wantUri || WARM_URI;
     api.createController($("sp"), {uri, width: "100%", height: 152}, c => {
       ctrl = c; loadedUri = uri; dbg("controller gemaakt " + uri.slice(-4));
-      c.addListener("ready", () => { ready = true; dbg("ready"); if (wantUri) loadedUri = ""; apply(); });
+      c.addListener("ready", () => { readyN++; ready = true; dbg("ready (" + readyN + "e)"); onReady(); });
       c.addListener("playback_update", e => { const d = e.data || {}; dbg("update " + String(d.playingURI || "").slice(-4) + " paused=" + d.isPaused); onUpdate(e); });
     });
   }
@@ -122,9 +131,10 @@
   $("play").onclick = () => {
     if (!ctrl || !wantUri) return;
     H.auto = true; playSent = true;
-    ctrl.togglePlay();
+    dbg("klik: " + (playing ? "pause" : "play"));
+    try { if (playing) ctrl.pause(); else ctrl.play(); } catch (e) {}
   };
-
   window.Hitster = H;
 })();
+
 
